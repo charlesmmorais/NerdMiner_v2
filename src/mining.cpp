@@ -40,7 +40,7 @@
 
 #endif
 
-nvs_handle_t stat_handle;
+nvs_handle_t stat_handle = 0;
 
 uint32_t templates = 0;
 uint32_t hashes = 0;
@@ -87,14 +87,14 @@ bool checkPoolConnection(void) {
   //Resolve first time pool DNS and save IP
   if(serverIP == IPAddress(1,1,1,1)) {
     WiFi.hostByName(Settings.PoolAddress.c_str(), serverIP);
-    Serial.printf("Resolved DNS and save ip (first time) got: %s\n", serverIP.toString());
+    Serial.printf("Resolved DNS and save ip (first time) got: %s\n", serverIP.toString().c_str());
   }
 
   //Try connecting pool IP
   if (!client.connect(serverIP, Settings.PoolPort)) {
     Serial.println("Imposible to connect to : " + Settings.PoolAddress);
     WiFi.hostByName(Settings.PoolAddress.c_str(), serverIP);
-    Serial.printf("Resolved DNS got: %s\n", serverIP.toString());
+    Serial.printf("Resolved DNS got: %s\n", serverIP.toString().c_str());
     return false;
   }
 
@@ -556,12 +556,14 @@ void runStratumWorker(void *name) {
           break;
         unsigned long sumbit_id = 0;
         tx_mining_submit(client, mWorker, mJob, res->nonce, sumbit_id);
+        #ifdef DEBUG_MINING
         Serial.print("   - Current diff share: "); Serial.println(res->difficulty,12);
         Serial.print("   - Current pool diff : "); Serial.println(currentPoolDifficulty,12);
         Serial.print("   - TX SHARE: ");
         for (size_t i = 0; i < 32; i++)
             Serial.printf("%02x", res->hash[i]);
         Serial.println("");
+        #endif
         mLastTXtoPool = millis();
 
         std::shared_ptr<Submition> submition = std::make_shared<Submition>();
@@ -1134,15 +1136,21 @@ void restoreStat() {
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     Serial.printf("[MONITOR] NVS partition is full or has invalid version, erasing...\n");
+    nvs_flash_erase();   // FIX: was re-initialising without erasing
     nvs_flash_init();
   }
 
   ret = nvs_open("state", NVS_READWRITE, &stat_handle);
+  if (ret != ESP_OK) {
+    Serial.printf("[MONITOR] nvs_open failed (%d), stats disabled\n", ret);
+    stat_handle = 0;
+    return;
+  }
 
   size_t required_size = sizeof(double);
   nvs_get_blob(stat_handle, "best_diff", &best_diff, &required_size);
   nvs_get_u32(stat_handle, "Mhashes", &Mhashes);
-  uint32_t nv_shares, nv_valids;
+  uint32_t nv_shares = 0, nv_valids = 0;   // FIX: were read uninitialised when key missing
   nvs_get_u32(stat_handle, "shares", &nv_shares);
   nvs_get_u32(stat_handle, "valids", &nv_valids);
   shares = nv_shares;
@@ -1159,7 +1167,7 @@ void restoreStat() {
   crc = crc32_add(crc, &upTime, sizeof(upTime));
   crc = crc32_finish(crc);
 
-  uint32_t nv_crc;
+  uint32_t nv_crc = 0;
   nvs_get_u32(stat_handle, "crc32", &nv_crc);
   if (nv_crc != crc)
   {
@@ -1173,7 +1181,7 @@ void restoreStat() {
 }
 
 void saveStat() {
-  if(!Settings.saveStats) return;
+  if(!Settings.saveStats || stat_handle == 0) return;
   Serial.printf("[MONITOR] Saving stats\n");
   nvs_set_blob(stat_handle, "best_diff", &best_diff, sizeof(best_diff));
   nvs_set_u32(stat_handle, "Mhashes", Mhashes);
@@ -1193,6 +1201,7 @@ void saveStat() {
   crc = crc32_add(crc, &upTime, sizeof(upTime));
   crc = crc32_finish(crc);
   nvs_set_u32(stat_handle, "crc32", crc);
+  nvs_commit(stat_handle);   // FIX: never committed
 }
 
 void resetStat() {

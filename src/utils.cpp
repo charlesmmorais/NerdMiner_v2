@@ -125,15 +125,17 @@ bool isSha256Valid(const void* sha256)
 bool checkValid(unsigned char* hash, unsigned char* target) {
   bool valid = true;
   unsigned char diff_target[32];
-  memcpy(diff_target, &target, 32);
+  // FIX: previously copied the pointer address (&target) instead of the target bytes
+  memcpy(diff_target, target, 32);
   //convert target to little endian for comparison
   reverse_bytes(diff_target, 32);
 
-  for(uint8_t i=31; i>=0; i--) {
-    if(hash[i] > diff_target[i]) {
-      valid = false;
-      break;
-    }
+  // Compare as 256-bit little-endian integers, most significant byte first.
+  // FIX: loop variable was uint8_t (never < 0 -> wrapped to 255 and read out of bounds),
+  // and a lower byte being smaller must settle the comparison, not just "greater".
+  for(int i=31; i>=0; i--) {
+    if(hash[i] < diff_target[i]) break;          // hash < target -> valid
+    if(hash[i] > diff_target[i]) { valid = false; break; }
   }
 
   #ifdef DEBUG_MINING
